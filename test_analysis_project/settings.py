@@ -3,7 +3,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_KEY = 'this-is-a-dummy-secret-key-for-the-demo'
 DEBUG = True
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
     'analysis', # Our app
@@ -45,7 +45,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'test_analysis_project.wsgi.application'
 
-# We are not using a real database for this mock
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',

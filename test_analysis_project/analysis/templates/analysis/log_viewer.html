@@ -42,19 +42,20 @@
                     </div>
                 </div>
                 <div>
-                    <h2 class="text-xl font-semibold text-white mb-4">Full Log</h2>
+                    <h2 class="text-xl font-semibold text-white mb-4">Full Test Log</h2>
                     <pre class="w-full bg-black text-xs text-green-400 p-4 rounded-lg h-96 overflow-y-auto"><code>{{ run.logs }}</code></pre>
                 </div>
             </div>
             <div>
                 <h2 class="text-xl font-semibold text-white mb-4">Analysis Details</h2>
                 <div class="bg-gray-800 p-4 rounded-lg space-y-4">
+                    <!-- Metadata -->
                     <div>
                         <h3 class="font-semibold text-white">Metadata</h3>
                         <p class="text-sm text-gray-400"><strong>Platform:</strong> {{ run.env_platform }}</p>
                         <p class="text-sm text-gray-400"><strong>Version:</strong> {{ run.oadp_version }}</p>
-                        <p class="text-sm text-gray-400"><strong>Repository:</strong> {{ run.repository }}</p>
                     </div>
+                    <!-- Tags -->
                     <div>
                         <h3 class="font-semibold text-white">Tags</h3>
                         <div class="flex flex-wrap gap-2 mt-2">
@@ -63,6 +64,7 @@
                             {% endfor %}
                         </div>
                     </div>
+                    <!-- Classifications -->
                     <div>
                         <h3 class="font-semibold text-white">Classifications</h3>
                         {% for c in run.analysis.classifications %}
@@ -73,13 +75,26 @@
                             </div>
                         {% endfor %}
                     </div>
+                     <!-- Action Results -->
                      <div>
-                        <h3 class="font-semibold text-white">Actions Taken</h3>
-                        <ul class="list-disc list-inside text-sm text-gray-400 mt-2">
-                           {% for action in run.analysis.actions %}
-                                <li>{{ action.action_type }}</li>
-                           {% endfor %}
-                        </ul>
+                        <h3 class="font-semibold text-white">Action Results</h3>
+                        {% for result in run.analysis.action_results %}
+                            <div class="mt-2 p-3 bg-gray-700/50 rounded">
+                                <p class="text-sm font-medium text-indigo-400">{{ result.action_type }}</p>
+                                {% if result.logs %}
+                                    <h4 class="text-xs font-semibold mt-2 mb-1 text-gray-400">Logs</h4>
+                                    <pre class="w-full bg-black text-xs text-gray-300 p-2 rounded-md overflow-x-auto"><code>{{ result.logs }}</code></pre>
+                                {% endif %}
+                                {% if result.artifacts %}
+                                     <h4 class="text-xs font-semibold mt-2 mb-1 text-gray-400">Artifacts</h4>
+                                    {% for key, value in result.artifacts.items %}
+                                        <p class="text-xs text-gray-400"><strong>{{ key }}:</strong> <a href="#" class="text-cyan-400 hover:underline">{{ value }}</a></p>
+                                    {% endfor %}
+                                {% endif %}
+                            </div>
+                        {% empty %}
+                             <p class="text-sm text-gray-400">No actions were executed.</p>
+                        {% endfor %}
                     </div>
                 </div>
             </div>
