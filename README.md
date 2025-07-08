@@ -84,8 +84,9 @@ This repository contains a fully runnable mock of the architecture using the Dja
 
 * Python 3.8+
 * `pip` for installing packages
+* Docker (for the containerized method)
 
-### Setup Instructions
+### Method 1: Running Locally
 
 1.  **Clone or Download the Project:**
     Ensure you have the `test_analysis_project` directory on your local machine.
@@ -122,12 +123,40 @@ This repository contains a fully runnable mock of the architecture using the Dja
     ```bash
     python manage.py runserver
     ```
-    You should see output indicating the server has started, similar to this:
+
+6.  **View the Dashboard:**
+    Open your web browser and navigate to:
+    [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
+
+---
+
+### Method 2: Running with Docker
+
+This is the easiest way to run the demo as it packages the application and its dependencies together.
+
+1.  **Prerequisites:**
+    * Ensure you have the `test_analysis_project` directory from the setup script.
+    * Make sure you have Docker installed and running on your machine.
+
+2.  **Create the `Dockerfile`:**
+    In the root of the `test_analysis_project` directory (the same level as `manage.py`), create a file named `Dockerfile`. Copy the content from the provided `Dockerfile` artifact into this new file.
+
+3.  **Create the `requirements.txt` file:**
+    In the same directory, create a `requirements.txt` file with the following content:
     ```
-    Performing system checks...
-    System check identified no issues (0 silenced).
-    Starting development server at [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
-    Quit the server with CONTROL-C.
+    django
+    ```
+
+4.  **Build the Docker Image:**
+    From your terminal, inside the `test_analysis_project` directory, run the following command. This will build the container image and tag it as `test-analysis-app`.
+    ```bash
+    docker build -t test-analysis-app .
+    ```
+
+5.  **Run the Docker Container:**
+    After the build is complete, run the container with this command. It maps port 8000 on your local machine to port 8000 inside the container.
+    ```bash
+    docker run -p 8000:8000 test-analysis-app
     ```
 
 6.  **View the Dashboard:**
@@ -137,7 +166,6 @@ This repository contains a fully runnable mock of the architecture using the Dja
 ## Future Enhancements
 
 This demo provides a strong foundation. To evolve it into a production-ready system, the next steps would include:
-
 * Replacing the in-memory database with a real one (e.g., PostgreSQL).
 * Integrating a real message queue (e.g., RabbitMQ or Kafka).
 * Building out the API integrations for Jira, Slack, and your CI/CD tool.
