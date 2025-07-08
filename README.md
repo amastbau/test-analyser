@@ -20,7 +20,7 @@ The system is designed as a modular, event-driven pipeline. This architecture en
         1.  First, try the fast Regex/Step-based classifiers.
         2.  If they fail to produce a high-confidence match, the system can **escalate the analysis** to a fine-tuned Large Language Model (LLM). This LLM would be trained on internal failure data to recognize complex and novel failure patterns that regex cannot handle.
 
-4.  **Decision & Action Engine:** A configurable rules engine that takes the classification results and other metadata (e.g., environment type, rerun count) to decide on the appropriate actions.
+4.  **Decision & Action Engine:** A configurable rules engine that takes the classification results and other metadata (e.g., environment type, rerun count) to decide on the appropriate actions. To make more intelligent decisions, it can also query external data sources.
 
 5.  **Action Executor:** A set of workers that perform the actions determined by the Decision Engine, such as creating a Jira ticket, posting a Slack notification, or triggering a custom script.
 
@@ -60,6 +60,51 @@ graph TD
     ActionExecutor -- "Executes Actions" --> Jira
     ActionExecutor -- "Executes Actions" --> Slack
 ```
+
+### Decision Engine Deep Dive
+
+To make more intelligent decisions, the Decision Engine can be enhanced to query external systems for additional context. For example, before creating a new bug ticket, it could query Jira to see if a similar bug already exists for that component.
+
+```mermaid
+graph TD
+    subgraph "Decision & Action Flow"
+        A[Classification Result] --> DE{Decision Engine};
+        DE -- "1. Need more context?" --> B(External Data Provider);
+        B -- "e.g., Query Jira API" --> C{Jira};
+        C -- "Returns existing bug info" --> B;
+        B -- "2. Provides context" --> DE;
+        DE -- "3. Applies Rules" --> D[Action Commands];
+    end
+```
+
+## Integrating with InstructLab for AI Classification
+
+The pluggable nature of the `Classifier Engine` is designed for a seamless evolution from a simple regex-based system to a sophisticated AI-driven one using tools like **InstructLab**.
+
+InstructLab is a community-driven project that allows for significant contributions to Large Language Models (LLMs) with a much lower barrier to entry than traditional model training. Here’s how it can be used to implement the `V2: LLM Classifier` in our architecture:
+
+1.  **Data Collection (The Feedback Loop):**
+    * The system runs with the `V1: Regex/Step Classifier`.
+    * When a failure occurs that the V1 classifier cannot identify, it gets flagged as `Needs Manual Review`.
+    * A human engineer analyzes this failure and provides the correct classification (e.g., "New Product Bug in Billing Service").
+    * This pairing of **(failure log + human-provided classification)** becomes a high-quality data point for training.
+
+2.  **Generating Skills with InstructLab:**
+    * These collected data points are converted into a format suitable for InstructLab, typically as question-and-answer pairs or instructions. For example:
+        * **Instruction:** "Classify the following test failure log."
+        * **Input:** `[The full text of the failure log]`
+        * **Output:** `{"classification": "Product Bug", "component": "Billing Service", "confidence": 0.95}`
+    * Using the `ilab` CLI, these new "skills" are generated and validated.
+
+3.  **Model Training and Deployment:**
+    * InstructLab uses this new knowledge to train and enhance a base LLM (like a model from the Granite or Llama families). This process is far more efficient than training a model from scratch.
+    * The newly enhanced model is then served as an API endpoint.
+
+4.  **Integration with the Classifier Engine:**
+    * The `Classifier Engine` in our system is updated. When the `V1: Regex/Step Classifier` fails to find a match, the engine makes an API call to our new InstructLab-powered model.
+    * It sends the failure log as input and receives the structured JSON classification as output, completing the analysis flow.
+
+This approach creates a powerful "flywheel effect": the more the system is used and the more manual triaging is done, the more data is collected to make the AI classifier smarter and more autonomous over time.
 
 ## Django Demo Implementation
 
