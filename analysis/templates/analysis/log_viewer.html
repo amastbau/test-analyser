@@ -29,8 +29,22 @@
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div class="lg:col-span-2">
-                <h2 class="text-xl font-semibold text-white mb-4">Full Log</h2>
-                <pre class="w-full bg-black text-xs text-green-400 p-4 rounded-lg h-96 overflow-y-auto"><code>{{ run.logs }}</code></pre>
+                <div>
+                    <h2 class="text-xl font-semibold text-white mb-4">Executed Steps</h2>
+                    <div class="bg-gray-800 p-4 rounded-lg space-y-2 mb-8">
+                        {% for step in run.steps %}
+                            <p class="p-2 rounded {% if step == run.failed_step %} bg-red-900 text-red-200 {% else %} bg-gray-700/50 {% endif %}">
+                                {{ step }}
+                            </p>
+                        {% empty %}
+                            <p class="text-gray-500">No steps found in log.</p>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div>
+                    <h2 class="text-xl font-semibold text-white mb-4">Full Log</h2>
+                    <pre class="w-full bg-black text-xs text-green-400 p-4 rounded-lg h-96 overflow-y-auto"><code>{{ run.logs }}</code></pre>
+                </div>
             </div>
             <div>
                 <h2 class="text-xl font-semibold text-white mb-4">Analysis Details</h2>
