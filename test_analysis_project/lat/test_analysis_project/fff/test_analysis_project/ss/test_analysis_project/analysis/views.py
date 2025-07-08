@@ -25,8 +25,6 @@ class ClassificationType(Enum):
     BACKUP_SUCCESSFUL = "backup-successful"
     SKIP = "skip"
     NEW_SKIP = "new-skip"
-    KNOWN_BUG_OADP_2345 = "known-bug-oadp-2345"
-    KNOWN_AUTOMATION_ISSUE_OADP_2345 = "known-automation-issue-oadp-2345"
     NEEDS_MANUAL_REVIEW = "Needs Manual Review"
 
 @dataclass
@@ -112,26 +110,12 @@ class ClassifierEngine:
         patterns = {
             "Connection timed out": ClassificationResult("REGEX_TIMEOUT", ClassificationType.KNOWN_FLAKE, 0.99, {"ticket": "PROJ-123"}),
             "database migration setup": ClassificationResult("REGEX_DB_MIGRATE", ClassificationType.SETUP_FAILURE, 0.95, {"error": "DB migration failed"}),
-            "mysql validation failed": ClassificationResult("REGEX_MYSQL_VALIDATE", ClassificationType.OCP_MYSQL_VALIDATION_FAILURE, 0.96, {}),
-            "mysql cleanup failed": ClassificationResult("REGEX_MYSQL_CLEANUP", ClassificationType.OCP_MYSQL_CLEANUP_FAILURE, 0.96, {}),
-            "ocp-mysql deploy failed": ClassificationResult("REGEX_MYSQL_DEPLOY", ClassificationType.OCP_MYSQL_DEPLOY_FAILURE, 0.97, {}),
-            "backup completed with warnings": ClassificationResult("REGEX_BACKUP_PARTIAL", ClassificationType.BACKUP_PARTIALLY_FAILED, 0.90, {"warning": "Some files were skipped"}),
-            "backup successful": ClassificationResult("REGEX_BACKUP_SUCCESS", ClassificationType.BACKUP_SUCCESSFUL, 1.0, {}),
             "Test skipped due to unstable environment": ClassificationResult("REGEX_SKIP_ENV", ClassificationType.SKIP, 1.0, {"reason": "Unstable Environment"}),
-            "Skipping test, feature flag is disabled": ClassificationResult("REGEX_SKIP_FLAG", ClassificationType.NEW_SKIP, 1.0, {"reason": "Feature Flag Disabled"}),
-            "error restoring snapshot oadp-2345": ClassificationResult("REGEX_KNOWN_BUG_2345", ClassificationType.KNOWN_BUG_OADP_2345, 1.0, {"ticket": "OADP-2345"}),
-            "automation framework panicked": ClassificationResult("REGEX_KNOWN_AUTO_ISSUE_2345", ClassificationType.KNOWN_AUTOMATION_ISSUE_OADP_2345, 1.0, {"ticket": "AUTO-112"}),
         }
         for pattern, result in patterns.items():
             if re.search(pattern, logs, re.IGNORECASE):
                 self.flow_log.append(f"   [Classifier] Match found: {result.classifier_id}")
                 found.append(result)
-
-        ansible_match = re.search(r"ansible-playbook error: one or more host failed.*use_role\":\"([^\"]+)\"", logs, re.DOTALL)
-        if ansible_match:
-            failed_role = ansible_match.group(1).split('/')[-1]
-            self.flow_log.append(f"   [Classifier] Match found: REGEX_ANSIBLE_FAILURE")
-            found.append(ClassificationResult("REGEX_ANSIBLE_FAILURE", ClassificationType.ANSIBLE_DEPLOY_FAILURE, 0.98, {"failed_role": failed_role}))
         return found
 
     def _llm_classifier(self, logs: str) -> List[ClassificationResult]:
@@ -197,12 +181,8 @@ class DecisionEngine:
         for c in classifications:
             if c.classification_type == ClassificationType.PRODUCT_BUG:
                 actions.append(ActionCommand(ActionType.CREATE_JIRA_TICKET, {"test_name": test.test_name}))
-            elif c.classification_type in [ClassificationType.KNOWN_BUG_OADP_2345, ClassificationType.KNOWN_AUTOMATION_ISSUE_OADP_2345]:
-                actions.append(ActionCommand(ActionType.UPDATE_JIRA_TICKET, {"ticket": c.details["ticket"]}))
             elif c.classification_type == ClassificationType.BACKUP_INTEGRITY_FAILURE:
                  actions.append(ActionCommand(ActionType.NOTIFY_SLACK, {"channel": "#storage-team", "details": c.details}))
-            elif c.classification_type == ClassificationType.ANSIBLE_DEPLOY_FAILURE:
-                actions.append(ActionCommand(ActionType.NOTIFY_SLACK, {"channel": "#devops-ansible", "failed_role": c.details["failed_role"]}))
             elif c.classification_type == ClassificationType.KNOWN_FLAKE:
                 actions.append(ActionCommand(ActionType.MARK_FOR_RERUN, {"reason": "Known flaky test"}))
             elif c.classification_type == ClassificationType.INFRA_ERROR:
@@ -226,8 +206,6 @@ class ActionExecutor:
 
         if action_type == ActionType.CREATE_JIRA_TICKET:
             payload.update({"status": "SUCCESS", "ticket_id": f"PROJ-{uuid.uuid4().hex[:4].upper()}"})
-        elif action_type == ActionType.UPDATE_JIRA_TICKET:
-            payload.update({"status": "SUCCESS", "ticket_id": command.payload.get("ticket", "N/A"), "comment": "New failure instance linked."})
         elif action_type == ActionType.NOTIFY_SLACK:
             payload.update({"status": "SUCCESS", "message_sent_to": command.payload.get("channel", "#default")})
         elif action_type == ActionType.RUN_CUSTOM_SCRIPT:
@@ -250,46 +228,15 @@ def run_full_simulation():
     decision_engine = DecisionEngine(classifier_engine, data_service, flow_log)
     action_executor = ActionExecutor(flow_log)
 
+    ansible_error_log = "Error during command execution: ansible-playbook error: one or more host failed... use_role\\\":\\\".../roles/ocp-mysql-deploy\\\""
+    ginkgo_log = "STEP: Setting up environment\nSTEP: Deploying application stack\nSTEP: Running backup for mysql-persistent\nSTEP: Verify backup integrity\nFAIL: Checksum mismatch for file /backup/data/db.sql"
+    infra_log = "STEP: Launching new VM\nERROR: Request failed, permission denied when creating security group."
+
     tests = [
-        TestResult("test_full_checkout_multi_error", "E2E", "build-503", "staging", 
-            "STEP: Navigating to storefront\nSTEP: Adding item to cart\nSTEP: Applying discount\nWARN: Connection timed out... FATAL: NullPointerException", 
-            "1.3.0", "stage", "AZURE", ["p1"]),
-        TestResult("test_mysql_backup_and_verify", "DB-Backup", "build-507", "prod", 
-            "STEP: Deploying application stack\nSTEP: Running backup for mysql-persistent\nSTEP: Verify backup integrity\nFAIL: Checksum mismatch for file /backup/data/db.sql", 
-            "1.4.1", "main", "GCP", ["db", "critical"]),
-        TestResult("test_vm_provisioning_error", "Infra", "build-511", "ci", 
-            "STEP: Allocating IP address\nSTEP: Launching new VM\nERROR: Request failed, permission denied when creating security group.", 
-            "1.5.0", "main", "vSphere", ["provisioning"]),
-        TestResult("test_feature_x_flow", "Feature-Flags", "build-513", "dev", 
-            "STEP: Checking feature flag\nINFO: Skipping test, feature flag is disabled", 
-            "1.5.0", "feature-x", "KIND", ["feature-toggle"]),
-        TestResult("test_mysql_restore_validation", "DB-Restore", "build-515", "dev", 
-            "STEP: Restoring DB from backup\nSTEP: Validating application after restore\nERROR: mysql validation failed due to permission denied on validation script.", 
-            "1.5.1", "dev-branch", "AWS", ["db"]),
-        TestResult("test_mysql_teardown_flake", "DB-Teardown", "build-516", "staging", 
-            "STEP: Tearing down mysql instance\nERROR: mysql cleanup failed. Error: Connection timed out.", 
-            "1.5.1", "stage", "AWS", ["db"]),
-        TestResult("test_ocp_mysql_deployment", "Deployment", "build-517", "ci", 
-            "STEP: Applying ocp-mysql manifest\nFATAL: ocp-mysql deploy failed.", 
-            "1.5.1", "main", "OCP", ["db"]),
-        TestResult("test_ansible_role_deploy", "Deployment", "build-518", "ci", 
-            "STEP: Running ansible playbook\nError during command execution: ansible-playbook error: one or more host failed... use_role\\\":\\\".../roles/ocp-datagrid\\\"", 
-            "1.5.1", "main", "OCP_BAREMETAL", ["deployment"]),
-        TestResult("test_large_volume_backup", "Backup", "build-519", "prod", 
-            "STEP: Backing up large volume\nINFO: backup completed with warnings. 2 files skipped.", 
-            "1.5.2", "main", "GCP", ["storage"]),
-        TestResult("test_backup_and_post_hook", "Backup", "build-520", "prod", 
-            "STEP: Running backup\nINFO: backup successful\nSTEP: Executing post-backup hook\nERROR: Post-backup hook failed to execute.", 
-            "1.5.2", "main", "GCP", ["storage"]),
-        TestResult("test_infra_setup_failure", "Setup", "build-521", "ci", 
-            "STEP: Provisioning network\nFATAL: database migration setup failed", 
-            "1.5.2", "main", "OCP", ["infra"]),
-        TestResult("test_known_bug_snapshot", "Restore", "build-523", "prod",
-            "STEP: Restoring from snapshot\nFATAL: error restoring snapshot oadp-2345 due to corrupted metadata",
-            "1.5.3", "main", "AWS", ["restore", "known-issue"]),
-        TestResult("test_known_automation_panic", "Framework", "build-524", "ci",
-            "STEP: Initializing test suite\nCRITICAL: automation framework panicked: attempted to read nil pointer",
-            "1.5.3", "main", "KIND", ["automation-stability"]),
+        TestResult("test_full_checkout_multi_error", "E2E", "build-503", "staging", "WARN: Connection timed out... FATAL: NullPointerException", "1.3.0", "stage", "AZURE", ["p1"]),
+        TestResult("test_mysql_backup_and_verify", "DB-Backup", "build-507", "prod", ginkgo_log, "1.4.1", "main", "GCP", ["db", "critical"]),
+        TestResult("test_vm_provisioning_error", "Infra", "build-511", "ci", infra_log, "1.5.0", "main", "vSphere", ["provisioning"]),
+        TestResult("test_feature_x_flow", "Feature-Flags", "build-513", "dev", "STEP: Checking feature flag\nINFO: Skipping test, feature flag is disabled", "1.5.0", "feature-x", "KIND", ["feature-toggle"]),
     ]
     
     for test in tests:
@@ -328,12 +275,10 @@ def log_view(request, test_run_id):
     
     result_dict = asdict(test_run)
     if 'analysis' in result_dict:
-        # Clean classifications
         if 'classifications' in result_dict['analysis']:
             for c in result_dict['analysis']['classifications']:
                 if isinstance(c.get('classification_type'), Enum): c['classification_type'] = c['classification_type'].value
                 c['details_pretty'] = json.dumps(c.get('details', {}), indent=2)
-        # Clean actions
         if 'actions' in result_dict['analysis']:
             for a in result_dict['analysis']['actions']:
                 if isinstance(a.get('action_type'), Enum): a['action_type'] = a['action_type'].value

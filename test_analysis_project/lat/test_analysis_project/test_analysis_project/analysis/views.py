@@ -25,8 +25,6 @@ class ClassificationType(Enum):
     BACKUP_SUCCESSFUL = "backup-successful"
     SKIP = "skip"
     NEW_SKIP = "new-skip"
-    KNOWN_BUG_OADP_2345 = "known-bug-oadp-2345"
-    KNOWN_AUTOMATION_ISSUE_OADP_2345 = "known-automation-issue-oadp-2345"
     NEEDS_MANUAL_REVIEW = "Needs Manual Review"
 
 @dataclass
@@ -95,15 +93,12 @@ class DataContextService:
     def clear(self): self._db.clear()
 
 class ClassifierEngine:
-    def __init__(self, data_service: DataContextService, flow_log: List[str]):
-        self._data_service = data_service
-        self.flow_log = flow_log
+    def __init__(self, data_service: DataContextService): self._data_service = data_service
     
     def _step_based_classifier(self, test_name: str, failed_step: Optional[str]) -> List[ClassificationResult]:
         if not failed_step: return []
         found = []
         if "test_mysql_backup" in test_name and "Verify backup integrity" in failed_step:
-            self.flow_log.append(f"   [Classifier] Match found: STEP_BACKUP_INTEGRITY")
             found.append(ClassificationResult("STEP_BACKUP_INTEGRITY", ClassificationType.BACKUP_INTEGRITY_FAILURE, 1.0, {"reason": "Checksum mismatch", "failed_step": failed_step}))
         return found
 
@@ -119,35 +114,27 @@ class ClassifierEngine:
             "backup successful": ClassificationResult("REGEX_BACKUP_SUCCESS", ClassificationType.BACKUP_SUCCESSFUL, 1.0, {}),
             "Test skipped due to unstable environment": ClassificationResult("REGEX_SKIP_ENV", ClassificationType.SKIP, 1.0, {"reason": "Unstable Environment"}),
             "Skipping test, feature flag is disabled": ClassificationResult("REGEX_SKIP_FLAG", ClassificationType.NEW_SKIP, 1.0, {"reason": "Feature Flag Disabled"}),
-            "error restoring snapshot oadp-2345": ClassificationResult("REGEX_KNOWN_BUG_2345", ClassificationType.KNOWN_BUG_OADP_2345, 1.0, {"ticket": "OADP-2345"}),
-            "automation framework panicked": ClassificationResult("REGEX_KNOWN_AUTO_ISSUE_2345", ClassificationType.KNOWN_AUTOMATION_ISSUE_OADP_2345, 1.0, {"ticket": "AUTO-112"}),
         }
         for pattern, result in patterns.items():
-            if re.search(pattern, logs, re.IGNORECASE):
-                self.flow_log.append(f"   [Classifier] Match found: {result.classifier_id}")
-                found.append(result)
+            if re.search(pattern, logs, re.IGNORECASE): found.append(result)
 
         ansible_match = re.search(r"ansible-playbook error: one or more host failed.*use_role\":\"([^\"]+)\"", logs, re.DOTALL)
         if ansible_match:
             failed_role = ansible_match.group(1).split('/')[-1]
-            self.flow_log.append(f"   [Classifier] Match found: REGEX_ANSIBLE_FAILURE")
             found.append(ClassificationResult("REGEX_ANSIBLE_FAILURE", ClassificationType.ANSIBLE_DEPLOY_FAILURE, 0.98, {"failed_role": failed_role}))
         return found
 
     def _llm_classifier(self, logs: str) -> List[ClassificationResult]:
         found = []
         if "nullpointerexception" in logs.lower():
-            self.flow_log.append(f"   [Classifier] Match found: LLM_NPE (PRODUCT_BUG)")
             found.append(ClassificationResult("LLM_NPE", ClassificationType.PRODUCT_BUG, 0.92, {"exception": "NullPointerException"}))
         if "permission denied" in logs.lower():
-            self.flow_log.append(f"   [Classifier] Match found: LLM_PERMS (INFRA_ERROR)")
             found.append(ClassificationResult("LLM_PERMS", ClassificationType.INFRA_ERROR, 0.88, {"error": "Permission denied"}))
         return found
 
     def classify(self, test_run_id: str) -> List[ClassificationResult]:
         test_result = self._data_service.get_test_result(test_run_id)
         if not test_result: return []
-        self.flow_log.append(f"-> Classifying '{test_result.test_name}'...")
         
         all_classifications = (
             self._regex_classifier(test_result.logs) +
@@ -157,28 +144,23 @@ class ClassifierEngine:
         
         skip_classifications = [c for c in all_classifications if c.classification_type in [ClassificationType.SKIP, ClassificationType.NEW_SKIP]]
         if skip_classifications:
-            self.flow_log.append(f"   [Classifier] Exclusive 'skip' classification found. Overriding others.")
             return [skip_classifications[0]]
 
         if not all_classifications:
-            self.flow_log.append(f"   [Classifier] No specific match. Defaulting to Needs Manual Review.")
             return [ClassificationResult("DEFAULT_REVIEW", ClassificationType.NEEDS_MANUAL_REVIEW, 0.5, {})]
         
         unique = {c.classifier_id: c for c in all_classifications}
         return sorted(list(unique.values()), key=lambda x: x.confidence, reverse=True)
 
 class DecisionEngine:
-    def __init__(self, classifier: ClassifierEngine, data_service: DataContextService, flow_log: List[str]):
+    def __init__(self, classifier: ClassifierEngine, data_service: DataContextService):
         self._classifier, self._data_service = classifier, data_service
-        self.flow_log = flow_log
-
     def process_test_result(self, test_result: TestResult):
         all_steps, failed_step = parse_ginkgo_steps(test_result.logs)
         test_result.steps, test_result.failed_step = all_steps, failed_step
         self._data_service.save_test_result(test_result)
         
         classifications = self._classifier.classify(test_result.test_run_id)
-        self.flow_log.append(f"   [DecisionEngine] Received {len(classifications)} classification(s). Applying rules...")
         action_commands = self._apply_rules(test_result, classifications)
         self._data_service.update_analysis(test_result.test_run_id, {
             "classifications": [asdict(c) for c in classifications],
@@ -191,14 +173,11 @@ class DecisionEngine:
         primary_classification = classifications[0] if classifications else None
 
         if primary_classification and primary_classification.classification_type in [ClassificationType.SKIP, ClassificationType.NEW_SKIP]:
-            self.flow_log.append(f"   [DecisionEngine] Rule matched: Skip test. Action: Do Nothing.")
             return [ActionCommand(ActionType.DO_NOTHING, {})]
 
         for c in classifications:
             if c.classification_type == ClassificationType.PRODUCT_BUG:
                 actions.append(ActionCommand(ActionType.CREATE_JIRA_TICKET, {"test_name": test.test_name}))
-            elif c.classification_type in [ClassificationType.KNOWN_BUG_OADP_2345, ClassificationType.KNOWN_AUTOMATION_ISSUE_OADP_2345]:
-                actions.append(ActionCommand(ActionType.UPDATE_JIRA_TICKET, {"ticket": c.details["ticket"]}))
             elif c.classification_type == ClassificationType.BACKUP_INTEGRITY_FAILURE:
                  actions.append(ActionCommand(ActionType.NOTIFY_SLACK, {"channel": "#storage-team", "details": c.details}))
             elif c.classification_type == ClassificationType.ANSIBLE_DEPLOY_FAILURE:
@@ -206,7 +185,7 @@ class DecisionEngine:
             elif c.classification_type == ClassificationType.KNOWN_FLAKE:
                 actions.append(ActionCommand(ActionType.MARK_FOR_RERUN, {"reason": "Known flaky test"}))
             elif c.classification_type == ClassificationType.INFRA_ERROR:
-                 actions.append(ActionCommand(ActionType.RUN_CUSTOM_SCRIPT, {"script_path": "/scripts/cleanup_stale_resources.sh"}))
+                 actions.append(ActionCommand(ActionType.RUN_CUSTOM_SCRIPT, {"script_path": "/scripts/cleanup_stale_pods.sh"}))
                  actions.append(ActionCommand(ActionType.MARK_FOR_MANUAL_REVIEW, {"reason": "Infrastructure instability"}))
 
         if not actions:
@@ -216,18 +195,12 @@ class DecisionEngine:
         return list(unique_actions.values())
 
 class ActionExecutor:
-    def __init__(self, flow_log: List[str]):
-        self.flow_log = flow_log
-
     def execute_action(self, command: ActionCommand) -> Dict:
         action_type = command.action_type
-        self.flow_log.append(f"   [ActionExecutor] Executing: {action_type.value}")
         payload = {"action_type": action_type.value}
 
         if action_type == ActionType.CREATE_JIRA_TICKET:
             payload.update({"status": "SUCCESS", "ticket_id": f"PROJ-{uuid.uuid4().hex[:4].upper()}"})
-        elif action_type == ActionType.UPDATE_JIRA_TICKET:
-            payload.update({"status": "SUCCESS", "ticket_id": command.payload.get("ticket", "N/A"), "comment": "New failure instance linked."})
         elif action_type == ActionType.NOTIFY_SLACK:
             payload.update({"status": "SUCCESS", "message_sent_to": command.payload.get("channel", "#default")})
         elif action_type == ActionType.RUN_CUSTOM_SCRIPT:
@@ -236,7 +209,7 @@ class ActionExecutor:
                 "status": "SUCCESS",
                 "script": script_path,
                 "logs": f"Executing {script_path}...\nConnecting to cluster...\nFound 3 stale pods.\nPod 'test-pod-123' deleted.\nPod 'test-pod-456' deleted.\nPod 'test-pod-789' deleted.\nScript finished.",
-                "artifacts": {"report_url": f"http://artifacts.example.com/cleanup/{uuid.uuid4().hex[:8]}.html"}
+                "artifacts": {"report": f"/tmp/cleanup_report_{uuid.uuid4().hex[:6]}.log"}
             })
         else:
             payload.update({"status": "INFO", "message": f"Action '{action_type.value}' recorded."})
@@ -244,61 +217,31 @@ class ActionExecutor:
         return payload
 
 def run_full_simulation():
-    flow_log = ["🚀 Starting new simulation run..."]
     data_service = DataContextService(); data_service.clear()
-    classifier_engine = ClassifierEngine(data_service, flow_log)
-    decision_engine = DecisionEngine(classifier_engine, data_service, flow_log)
-    action_executor = ActionExecutor(flow_log)
+    classifier_engine = ClassifierEngine(data_service)
+    decision_engine = DecisionEngine(classifier_engine, data_service)
+    action_executor = ActionExecutor()
+
+    ansible_error_log = "Error during command execution: ansible-playbook error: one or more host failed... use_role\\\":\\\".../roles/ocp-mysql-deploy\\\""
+    ginkgo_log = "STEP: Setting up environment\nSTEP: Deploying application stack\nSTEP: Running backup for mysql-persistent\nSTEP: Verify backup integrity\nFAIL: Checksum mismatch for file /backup/data/db.sql"
+    partial_backup_log = "STEP: Starting backup\nbackup successful\nWARN: backup completed with warnings"
+    cleanup_log = "STEP: Validating application after restore\nSTEP: Tearing down test resources\nERROR: mysql cleanup failed"
+    infra_log = "STEP: Launching new VM\nERROR: Request failed, permission denied when creating security group."
 
     tests = [
-        TestResult("test_full_checkout_multi_error", "E2E", "build-503", "staging", 
-            "STEP: Navigating to storefront\nSTEP: Adding item to cart\nSTEP: Applying discount\nWARN: Connection timed out... FATAL: NullPointerException", 
-            "1.3.0", "stage", "AZURE", ["p1"]),
-        TestResult("test_mysql_backup_and_verify", "DB-Backup", "build-507", "prod", 
-            "STEP: Deploying application stack\nSTEP: Running backup for mysql-persistent\nSTEP: Verify backup integrity\nFAIL: Checksum mismatch for file /backup/data/db.sql", 
-            "1.4.1", "main", "GCP", ["db", "critical"]),
-        TestResult("test_vm_provisioning_error", "Infra", "build-511", "ci", 
-            "STEP: Allocating IP address\nSTEP: Launching new VM\nERROR: Request failed, permission denied when creating security group.", 
-            "1.5.0", "main", "vSphere", ["provisioning"]),
-        TestResult("test_feature_x_flow", "Feature-Flags", "build-513", "dev", 
-            "STEP: Checking feature flag\nINFO: Skipping test, feature flag is disabled", 
-            "1.5.0", "feature-x", "KIND", ["feature-toggle"]),
-        TestResult("test_mysql_restore_validation", "DB-Restore", "build-515", "dev", 
-            "STEP: Restoring DB from backup\nSTEP: Validating application after restore\nERROR: mysql validation failed due to permission denied on validation script.", 
-            "1.5.1", "dev-branch", "AWS", ["db"]),
-        TestResult("test_mysql_teardown_flake", "DB-Teardown", "build-516", "staging", 
-            "STEP: Tearing down mysql instance\nERROR: mysql cleanup failed. Error: Connection timed out.", 
-            "1.5.1", "stage", "AWS", ["db"]),
-        TestResult("test_ocp_mysql_deployment", "Deployment", "build-517", "ci", 
-            "STEP: Applying ocp-mysql manifest\nFATAL: ocp-mysql deploy failed.", 
-            "1.5.1", "main", "OCP", ["db"]),
-        TestResult("test_ansible_role_deploy", "Deployment", "build-518", "ci", 
-            "STEP: Running ansible playbook\nError during command execution: ansible-playbook error: one or more host failed... use_role\\\":\\\".../roles/ocp-datagrid\\\"", 
-            "1.5.1", "main", "OCP_BAREMETAL", ["deployment"]),
-        TestResult("test_large_volume_backup", "Backup", "build-519", "prod", 
-            "STEP: Backing up large volume\nINFO: backup completed with warnings. 2 files skipped.", 
-            "1.5.2", "main", "GCP", ["storage"]),
-        TestResult("test_backup_and_post_hook", "Backup", "build-520", "prod", 
-            "STEP: Running backup\nINFO: backup successful\nSTEP: Executing post-backup hook\nERROR: Post-backup hook failed to execute.", 
-            "1.5.2", "main", "GCP", ["storage"]),
-        TestResult("test_infra_setup_failure", "Setup", "build-521", "ci", 
-            "STEP: Provisioning network\nFATAL: database migration setup failed", 
-            "1.5.2", "main", "OCP", ["infra"]),
-        TestResult("test_known_bug_snapshot", "Restore", "build-523", "prod",
-            "STEP: Restoring from snapshot\nFATAL: error restoring snapshot oadp-2345 due to corrupted metadata",
-            "1.5.3", "main", "AWS", ["restore", "known-issue"]),
-        TestResult("test_known_automation_panic", "Framework", "build-524", "ci",
-            "STEP: Initializing test suite\nCRITICAL: automation framework panicked: attempted to read nil pointer",
-            "1.5.3", "main", "KIND", ["automation-stability"]),
+        TestResult("test_full_checkout_multi_error", "E2E", "build-503", "staging", "WARN: Connection timed out... FATAL: NullPointerException", "1.3.0", "stage", "AZURE", ["p1"]),
+        TestResult("test_mysql_backup_and_verify", "DB-Backup", "build-507", "prod", ginkgo_log, "1.4.1", "main", "GCP", ["db", "critical"]),
+        TestResult("test_ansible_role_deploy", "Deployment", "build-505", "ci", ansible_error_log, "1.4.0", "main", "OCP_BAREMETAL", ["deployment"]),
+        TestResult("test_mysql_validation_with_perms", "DB-Restore", "build-508", "dev", "STEP: Validating application after restore\nERROR: mysql validation failed due to permission denied on /data", "1.4.1", "dev-branch", "AWS", ["db"]),
+        TestResult("test_partial_backup_flake", "DB-Backup", "build-509", "staging", f"STEP: Starting backup\n{partial_backup_log}\nERROR: Connection timed out", "1.4.1", "stage", "GCP", ["db"]),
+        TestResult("test_successful_backup_cleanup_fail", "DB-Backup", "build-510", "prod", cleanup_log, "1.4.2", "main", "AZURE", ["db"]),
+        TestResult("test_vm_provisioning_error", "Infra", "build-511", "ci", infra_log, "1.5.0", "main", "vSphere", ["provisioning"]),
+        TestResult("test_feature_x_flow", "Feature-Flags", "build-513", "dev", "STEP: Checking feature flag\nINFO: Skipping test, feature flag is disabled", "1.5.0", "feature-x", "KIND", ["feature-toggle"]),
     ]
-    
     for test in tests:
-        flow_log.append(f"--- Processing Test: {test.test_name} ---")
         action_commands = decision_engine.process_test_result(test)
         action_results = [action_executor.execute_action(cmd) for cmd in action_commands]
         data_service.update_analysis(test.test_run_id, {"action_results": action_results})
-    
-    flow_log.append("✅ Simulation complete.")
     
     final_results = []
     for result in data_service.get_all_results():
@@ -311,14 +254,11 @@ def run_full_simulation():
                 for a in result_dict['analysis']['actions']:
                     if isinstance(a.get('action_type'), Enum): a['action_type'] = a['action_type'].value
         final_results.append(result_dict)
-    return final_results, flow_log
+    return final_results
 
 def dashboard_view(request):
-    test_results_data, flow_log = run_full_simulation()
-    context = {
-        'test_results': test_results_data,
-        'flow_log': flow_log,
-    }
+    test_results_data = run_full_simulation()
+    context = {'test_results': test_results_data}
     return render(request, 'analysis/dashboard.html', context)
 
 def log_view(request, test_run_id):

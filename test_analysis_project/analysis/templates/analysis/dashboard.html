@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Analysis Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style> body { font-family: 'Inter', sans-serif; } </style>
+</head>
+<body class="bg-gray-900 text-gray-300">
+    <nav class="bg-gray-800">
+        <div class="container mx-auto px-4 md:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="{% url 'dashboard' %}" class="text-white font-bold text-xl">Analysis Dashboard</a>
+                </div>
+                <div class="flex items-center">
+                    <a href="{% url 'manage' %}" class="text-gray-300 hover:bg-gray-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Manage</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-white">Test Failure Results</h1>
+            <p class="text-gray-400">Results from the latest analysis run. Refresh the page to re-run the simulation.</p>
+        </header>
+
+        <div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-700">
+                    <thead class="bg-gray-700/50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Test Details</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Failed Step</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Classifications</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-gray-800 divide-y divide-gray-700">
+                        {% for run in test_results %}
+                            <tr class="hover:bg-gray-700/50">
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <a href="{% url 'log_view' run.test_run_id %}" class="text-sm font-medium text-indigo-400 hover:text-indigo-300">{{ run.test_name }}</a>
+                                    <div class="text-xs text-gray-400">{{ run.env_platform }} | {{ run.oadp_version }}</div>
+                                </td>
+                                <td class="px-6 py-4 text-sm text-yellow-400 truncate" style="max-width: 300px;" title="{{ run.failed_step|default:"N/A" }}">
+                                    {{ run.failed_step|default:"N/A" }}
+                                </td>
+                                <td class="px-6 py-4">
+                                    <div class="flex flex-col space-y-1">
+                                        {% for c in run.analysis.classifications %}
+                                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-900 text-blue-100" title="Confidence: {{ c.confidence|floatformat:2 }}">{{ c.classification_type }}</span>
+                                        {% empty %}
+                                            <span class="text-xs text-gray-500">N/A</span>
+                                        {% endfor %}
+                                    </div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
+                                    {% for action in run.analysis.actions %}
+                                        <span>{{ action.action_type }}{% if not forloop.last %}, {% endif %}</span>
+                                    {% empty %}
+                                        None
+                                    {% endfor %}
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="4" class="text-center py-12 text-gray-500">No test results found.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
