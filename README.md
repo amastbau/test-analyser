@@ -83,26 +83,87 @@ The pluggable nature of the `Classifier Engine` is designed for a seamless evolu
 
 InstructLab is a community-driven project that allows for significant contributions to Large Language Models (LLMs) with a much lower barrier to entry than traditional model training. Here’s how it can be used to implement the `V2: LLM Classifier` in our architecture:
 
-1.  **Data Collection (The Feedback Loop):**
-    * The system runs with the `V1: Regex/Step Classifier`.
-    * When a failure occurs that the V1 classifier cannot identify, it gets flagged as `Needs Manual Review`.
-    * A human engineer analyzes this failure and provides the correct classification (e.g., "New Product Bug in Billing Service").
-    * This pairing of **(failure log + human-provided classification)** becomes a high-quality data point for training.
+### Step 1: Data Collection (The Feedback Loop)
 
-2.  **Generating Skills with InstructLab:**
-    * These collected data points are converted into a format suitable for InstructLab, typically as question-and-answer pairs or instructions. For example:
-        * **Instruction:** "Classify the following test failure log."
-        * **Input:** `[The full text of the failure log]`
-        * **Output:** `{"classification": "Product Bug", "component": "Billing Service", "confidence": 0.95}`
-    * Using the `ilab` CLI, these new "skills" are generated and validated.
+The process begins by identifying failures that the current system cannot classify.
 
-3.  **Model Training and Deployment:**
-    * InstructLab uses this new knowledge to train and enhance a base LLM (like a model from the Granite or Llama families). This process is far more efficient than training a model from scratch.
-    * The newly enhanced model is then served as an API endpoint.
+1.  Run the Django demo application.
+2.  On the main dashboard, look for a test run where the only classification is **"Needs Manual Review"**.
+3.  Click on the test name to go to the **Log Viewer** page.
+4.  At the bottom of the page, you will find the **"Generate AI Training Data (InstructLab)"** section. This provides the exact template needed to teach the AI about this failure.
 
-4.  **Integration with the Classifier Engine:**
-    * The `Classifier Engine` in our system is updated. When the `V1: Regex/Step Classifier` fails to find a match, the engine makes an API call to our new InstructLab-powered model.
-    * It sends the failure log as input and receives the structured JSON classification as output, completing the analysis flow.
+### Step 2: Initialize Your InstructLab Project
+
+In your terminal, create a new directory for your InstructLab project and initialize it.
+
+```bash
+# This uses the Granite 7B model, a great starting point.
+ilab init --model granite-7b-lab
+
+# Navigate into the new directory
+cd instructlab
+```
+
+### Step 3: Create a Taxonomy for Your Skills
+
+A taxonomy is how you organize the knowledge you're adding. For our system, we can create a taxonomy for test failure classification.
+
+```bash
+ilab taxonomy new test_analysis.classification
+```
+
+This creates a `qna.yaml` file located at `taxonomy/test_analysis/classification/qna.yaml`. This file is where you will add your training examples.
+
+### Step 4: Add the New Skill
+
+This is where you use the data from the Django demo.
+
+1.  Open the `taxonomy/test_analysis/classification/qna.yaml` file in a text editor.
+2.  Copy the training data from the **Log Viewer** page in the demo.
+3.  **Crucially, edit the `output` section** with the correct, human-verified analysis for that failure.
+
+For example, if the unclassified failure was an `Unexpected token '<'` error, you would add the following entry to your `qna.yaml`:
+
+```yaml
+# taxonomy/test_analysis/classification/qna.yaml
+---
+version: 1
+taxonomy:
+- name: test_analysis
+  description: Skills for analyzing test automation results
+- name: classification
+  description: Classifying specific test failures
+  questions:
+  -
+    # This is the 'instruction' from the demo
+    question: Classify the following test failure log based on the provided context.
+    # This is the 'input' from the demo
+    context: |
+      Test Name: test_unclassified_failure
+      Suite: GUI
+      Failed Step: Clicking the 'Save' button
+
+      --- LOGS ---
+      ERROR: Unexpected token '<' at position 0
+    # This is the 'output' that you, the human, provide
+    answer: |
+      {"classification": "New Product Bug", "component": "WebApp Frontend", "details": {"reason": "The server is returning HTML instead of JSON on API error, causing a client-side parsing failure."}}
+```
+
+### Step 5: Train and Test the Model Locally
+
+Now, you can fine-tune the local LLM with your new knowledge.
+
+1.  **Train the Model:** This command reads your `qna.yaml` files and fine-tunes the base model with the new skill.
+    ```bash
+    ilab train
+    ```
+
+2.  **Test the New Skill:** After training is complete, start a chat session with your newly trained model.
+    ```bash
+    ilab chat
+    ```
+    You can now test if it learned the new skill by pasting a similar log message. Your fine-tuned model should respond with the structured JSON classification you taught it. This model could then be deployed as the `V2: LLM Classifier` in our architecture.
 
 This approach creates a powerful "flywheel effect": the more the system is used and the more manual triaging is done, the more data is collected to make the AI classifier smarter and more autonomous over time.
 
@@ -216,4 +277,3 @@ This demo provides a strong foundation. To evolve it into a production-ready sys
 * Building out the API integrations for Jira, Slack, and your CI/CD tool.
 * Fine-tuning and deploying a real LLM for the advanced classification step.
 * Adding a database-backed UI for managing classifiers and decision rules dynamically.
-
