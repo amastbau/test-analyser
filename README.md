@@ -35,7 +35,7 @@ graph TD
     end
 
     subgraph "Auto-Analysis System"
-        IngestionAPI["1. Ingestion Layer"]
+        IngestionAPI["Ingestion Layer"]
         MessageQueue["Message Queue"]
         
         subgraph "Classifier Engine (Pluggable)"
@@ -47,8 +47,8 @@ graph TD
             RegexClassifier -- "On No Match" --> LLMClassifier
         end
 
-        DecisionEngine["4. Decision Engine (Rules)"]
-        ActionExecutor["5. Action Executor"]
+        DecisionEngine["Decision Engine (Rules)"]
+        ActionExecutor["Action Executor"]
     end
 
     CICD -- "Reports Failure" --> IngestionAPI
